@@ -333,5 +333,112 @@ paths.show()
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ### Q4: What is the longest cyclic path taken by a user that starts at the book “Jack and the Beanstalk” to return back to where they started?
+# MAGIC Consider a user is visiting amazon.com and is viewing the book “Jack and the Beanstalk” and from then on is only using the links under “Customers who bought this item also bought” list to view other items, and after a certain number of clicks is back to the page for “Jack and the Beanstalk”. If we call this a cyclic path, what is the longest cyclic path taken by a user to return to the book “Jack and the Beanstalk”?
+# MAGIC #### Answer:
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Q5: In June 2003, for all the products in group DVD, how many items (clicks) would it take for a customer to go from the bestselling product to the worst selling product? What would the path taken be?
+# MAGIC In June 2003, for all the products in group DVD, if a user is at the amazon.com page for the bestselling product and from then on is only using the links under “Customers who bought this item also bought” list to view other items, how many items (clicks) later will they reach the worst selling product? What was the path taken? List the items in the order in which they were clicked. 
+# MAGIC [NOTE: Salesrank of each product is calculated based on how many times it was sold. A product climbs up the rank as it’s sales increases. Therefore, lower the salesrank number higher it is in the order and number of sales]
+# MAGIC
+# MAGIC #### Answer:
+# MAGIC
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Q6: For product with ASIN: 0385492081 display the most helpful review(s) of the highest rating and the most helpful review(s) of the lowest rating.
+# MAGIC
+# MAGIC #### Answer:
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## GraphFrames Exploration
 # MAGIC After answering those questions, we wanted to explore a little bit more. Specifically, we wanted to see what we could do with the GraphFrames APIs.
+
+# COMMAND ----------
+
+# Product recommendations
+def recommend_products(product_id, n):
+    # Find the neighbors of the given product
+    neighbors = g.edges.filter(F.col("src") == product_id)
+        #  | (F.col("dst") == product_id)) \
+        # .select(F.when(F.col("src") == product_id, F.col("dst")).otherwise(F.col("src")).alias("neighbor"))
+    
+    # Join with the vertices DataFrame to get product details
+    recommendations = neighbors.join(vertices, neighbors["dst"] == vertices["id"]) \
+        .select("id", "title", "group", "salesrank")
+    
+    return recommendations
+
+# Community detection
+result = g.labelPropagation(maxIter=5)
+communities = result.select("id", "label")
+
+# PageRank
+result = g.pageRank(resetProbability=0.15, maxIter=10)
+page_ranks = result.vertices.select("id", "pagerank")
+
+display(communities)
+display(page_ranks)
+
+
+# COMMAND ----------
+
+top_20 = page_ranks.orderBy("pagerank", ascending=False).limit(20)
+display(top_20)
+
+# COMMAND ----------
+
+display(top_20.join(node_metadata_df, "id"))
+
+# COMMAND ----------
+
+# Find the size of each community
+community_sizes = communities.groupBy("label").count()
+
+# Find the biggest communities + join with details
+biggest_communities = community_sizes.orderBy(F.col("count").desc()).limit(10)
+biggest_community_details = communities.join(node_metadata_df, "id").join(biggest_communities, "label")
+
+# Find the smallest communities + join with details
+smallest_communities = community_sizes.orderBy(F.col("count").asc()).limit(10)
+smallest_community_details = communities.join(node_metadata_df, "id").join(smallest_communities, "label")
+
+
+# COMMAND ----------
+
+from pyspark.sql.window import Window
+
+# Calculate the proportion of each group within each community
+biggest_group_proportions = biggest_community_details.groupBy("label", "group").count() \
+    .withColumn("proportion", F.col("count") / F.sum("count").over(Window.partitionBy("label")))
+smallest_group_proportions = smallest_community_details.groupBy("label", "group").count() \
+    .withColumn("proportion", F.col("count") / F.sum("count").over(Window.partitionBy("label")))
+
+
+# Show the result
+display(biggest_group_proportions)
+display(smallest_group_proportions)
+
+# COMMAND ----------
+
+# Get average review rating and average number of ratings for communities
+biggest_community_ratings = biggest_community_details.groupBy("label") \
+    .agg(
+        F.avg("reviews_avg_rating").alias("avg_review_rating"),
+        F.avg("reviews_total").alias("avg_num_ratings")
+    )
+
+smallest_community_ratings = smallest_community_details.groupBy("label") \
+    .agg(
+        F.avg("reviews_avg_rating").alias("avg_review_rating"),
+        F.avg("reviews_total").alias("avg_num_ratings")
+    )
+
+display(biggest_community_ratings)
+display(smallest_community_ratings)

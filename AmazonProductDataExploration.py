@@ -191,7 +191,7 @@ product_21_reviews_df = product_21_reviews_df.withColumn("rating", F.regexp_extr
 rating_counts_df = product_21_reviews_df.groupBy("rating").count()
 
 # Calculate the percentage of each rating
-total_ratings = rating_counts_df.agg(F.sum("count")).collect()[0][0]
+total_ratings = product_21_df.select("reviews_total").collect()[0][0]
 rating_percentages_df = rating_counts_df.withColumn("percentage", (F.col("count") / total_ratings) * 100)
 
 # Sort the result by the rating column in descending order

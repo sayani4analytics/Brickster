@@ -18,7 +18,7 @@
 
 # Declare storage account information
 storage_account_name = "amazonproductdata"
-# TODO: don't store storage key here...
+# TODO: replace <Storage Key Here> with actual storage key
 storage_account_access_key = "<Storage Key Here>"
 
 # Set up connection
@@ -39,10 +39,6 @@ meta_file_location = "wasbs://raw-data@amazonproductdata.blob.core.windows.net/a
 # MAGIC %md
 # MAGIC ### Connecting to data stored in the Databricks File System (DBFS)
 # MAGIC Data can also be uploaded within the Databricks workspace UI to DBFS. This is convenient for many users and allows data to be uploaded and managed all in the same system. If flexibility or existing data are not concerns, this is a good option for getting started quickly without worrying about things like authentication to read files.
-
-# COMMAND ----------
-
-# TODO: file path declarations, overwriting azure storage ones
 
 # COMMAND ----------
 
@@ -97,15 +93,6 @@ display(june_df)
 edge_all_df=mar_2_df.union(mar_12_df).union(may_5_df).union(june_1_df)
 edge_all_df.count()
 display(edge_all_df)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC #### Reading edge data (using map)
-
-# COMMAND ----------
-
-# TODO: add reading edge data
 
 # COMMAND ----------
 
@@ -513,19 +500,6 @@ OR rating=(select min(rating) as highest_rating from df_asin_reviews) #lowest ra
 
 # COMMAND ----------
 
-# Product recommendations
-def recommend_products(product_id, n):
-    # Find the neighbors of the given product
-    neighbors = g.edges.filter(F.col("src") == product_id)
-        #  | (F.col("dst") == product_id)) \
-        # .select(F.when(F.col("src") == product_id, F.col("dst")).otherwise(F.col("src")).alias("neighbor"))
-    
-    # Join with the vertices DataFrame to get product details
-    recommendations = neighbors.join(vertices, neighbors["dst"] == vertices["id"]) \
-        .select("id", "title", "group", "salesrank")
-    
-    return recommendations
-
 # Community detection
 result = g.labelPropagation(maxIter=5)
 communities = result.select("id", "label")
@@ -578,17 +552,19 @@ display(smallest_group_proportions)
 
 # COMMAND ----------
 
-# Get average review rating and average number of ratings for communities
+# Get average review rating, average number of ratings, and average salesrank for communities
 biggest_community_ratings = biggest_community_details.groupBy("label") \
     .agg(
         F.avg("reviews_avg_rating").alias("avg_review_rating"),
-        F.avg("reviews_total").alias("avg_num_ratings")
+        F.avg("reviews_total").alias("avg_num_ratings"),
+        F.avg("salesrank").alias("avg_salesrank")
     )
 
 smallest_community_ratings = smallest_community_details.groupBy("label") \
     .agg(
         F.avg("reviews_avg_rating").alias("avg_review_rating"),
-        F.avg("reviews_total").alias("avg_num_ratings")
+        F.avg("reviews_total").alias("avg_num_ratings"),
+        F.avg("salesrank").alias("avg_salesrank")
     )
 
 display(biggest_community_ratings)

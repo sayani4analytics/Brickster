@@ -94,6 +94,10 @@ display(late_march_df)
 display(may_df)
 display(june_df)
 
+edge_all_df=mar_2_df.union(mar_12_df).union(may_5_df).union(june_1_df)
+edge_all_df.count()
+display(edge_all_df)
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -148,11 +152,28 @@ display(metadata_df)
 
 # Save dataframe as delta table
 metadata_df.write.saveAsTable("product_metadata")
+edge_all_df.write.saveAsTable("amazon_edges")
 
 # COMMAND ----------
 
 # Reference delta table for dataframe 
 node_metadata_df = spark.table("product_metadata")
+
+# Visualizing the graph
+
+import networkx as nx
+#import matplotlib as plt
+
+def PlotGraph(edge_list):
+    Gplot=nx.Graph()
+    for row in edge_list.select('src','dst').take(50):
+        Gplot.add_edge(row['src'],row['dst'])
+
+    #plt.subplot(121)
+    nx.draw(Gplot, with_labels=True#, font_weight='bold'
+            )
+
+PlotGraph(g.edges)
 
 # COMMAND ----------
 
@@ -332,10 +353,53 @@ paths.show()
 
 # COMMAND ----------
 
+
+
 # MAGIC %md
 # MAGIC ### Q4: What is the longest cyclic path taken by a user that starts at the book “Jack and the Beanstalk” to return back to where they started?
 # MAGIC Consider a user is visiting amazon.com and is viewing the book “Jack and the Beanstalk” and from then on is only using the links under “Customers who bought this item also bought” list to view other items, and after a certain number of clicks is back to the page for “Jack and the Beanstalk”. If we call this a cyclic path, what is the longest cyclic path taken by a user to return to the book “Jack and the Beanstalk”?
 # MAGIC #### Answer:
+
+%sql
+
+select * from product_metadata
+where title like '%Jack%Beanstalk%'
+and group='Book'
+
+df_book=g.vertices.filter((col('title').contains('Jack and the Beanstalk')) & (col('group')=='Book'))
+display(df_book)
+
+# function to find longest path
+
+def find_longest_cyclic_path(graph, vertex):
+    visited = set()
+    stack = [(vertex, [vertex])]  # Stack stores tuples of (current_vertex, path)
+
+    longest_path = []
+
+    while stack:
+        current_vertex, path = stack.pop()
+
+        if current_vertex in visited:
+            continue
+
+        visited.add(current_vertex)
+
+        neighbors = graph.find(f"(a)-[]->(b)").filter(f"a.id = '{current_vertex}'").select("b.id").collect()
+
+        for neighbor in neighbors:
+            if neighbor[0] == vertex and len(path) > 2:
+                # Found a cyclic path
+                if len(path) > len(longest_path):
+                    longest_path = path[:]
+            elif neighbor[0] not in visited:
+                stack.append((neighbor[0], path + [neighbor[0]]))
+
+    return longest_path
+
+start_vertex = "273043"  # Replace with the desired vertex
+longest_path = find_longest_cyclic_path(g, start_vertex)
+longest_path
 
 # COMMAND ----------
 
@@ -347,12 +411,99 @@ paths.show()
 # MAGIC #### Answer:
 # MAGIC
 
+# Pseudo-code:
+# 1. Set up a new graphframe with vertices data and June purchase edge data
+# 2. Filter the graphframe data for product group "DVD"
+# 3. Find the best selling product and worst selling product. Best selling product will have lower sales rank and worst selling product will have higher sales rank
+
+# %%
+# create graphframe for June purchases and a dataframe that filter down to product group "DVD"
+vertices_df_dvd=vertices_df.filter(col("group")=="DVD")
+g_june_dvd=GraphFrame(vertices_df_dvd,june_1_df)
+g_june=GraphFrame(vertices_df,june_1_df)
+
+
+display(g_june_dvd.vertices)
+df_dvd=g_june_dvd.vertices
+
+#
+# Best selling product with least rank
+best_prod=df_dvd.where((col('salesrank')!='-1') & (col('salesrank')!='0')).withColumn("rank_numeric",col('salesrank').cast("int")).orderBy("rank_numeric",ascending=True).head(1)
+display(best_prod)
+
+# %%
+# Worst selling product with highest rank
+worst_prod=df_dvd.where((col('salesrank')!='-1') & (col('salesrank')!='0')).withColumn("rank_numeric",col('salesrank').cast("int")).orderBy("rank_numeric",ascending=False).head(1)
+display(worst_prod)
+
+#
+# Now that we have got the id of best and worst product, we need to find the paths connecting best to worst product
+
+# Best product id= 193107
+# Worst product id= 22358
+
+paths_best_to_worst=g_june.shortestPaths(landmarks=['22358'])
+paths_best_to_worst.select("id", "distances").filter(col('id')=='193107').show()
+
+
+paths_best_to_worst_bfs=g_june.bfs("id=193107","id=22358")
+paths_best_to_worst_bfs.show()
+
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ### Q6: For product with ASIN: 0385492081 display the most helpful review(s) of the highest rating and the most helpful review(s) of the lowest rating.
 # MAGIC
 # MAGIC #### Answer:
+
+# - Filter the vertices dataframe for this ASIN and create a new dataframe.
+# - Take the “reviews” column which is an array and unnest it using the explode function into new rows. Create a new reviews dataframe
+# - Using regex, extract the rating , votes, helpful columns
+# - Create a temporaryview using this new dataframe and analyze the data using SQL
+
+from pyspark.sql.functions import explode
+#Create a dataframe which is filtered for this ASIN
+df_asin=vertices_df.filter(col("asin")=='0385492081').select("id","asin","title","reviews","reviews_total")
+
+
+#Retrieve ratings, votes and helpful from the reviews column.
+df_asin_reviews=df_asin.select(explode("reviews").alias("review"))
+
+
+# Regex and extract the rating , votes, helpful columns 
+df_asin_reviews=df_asin_reviews.withColumn("rating", F.regexp_extract("review", r"rating:\s+(\d+)", 1))\
+                        .withColumn("votes", F.regexp_extract("review", r"votes:\s+(\d+)", 1))\
+                        .withColumn("helpful", F.regexp_extract("review", r"helpful:\s+(\d+)", 1))
+                        
+df_asin_reviews_final=df_asin.join(df_asin_reviews).drop("reviews")
+
+# Create temporaryview
+df_asin_reviews_final.createOrReplaceTempView("df_asin_reviews")
+
+%sql
+select asin, review, rating, helpful, votes from df_asin_reviews
+
+# %%
+%sql
+#highest and lowest rating
+select 
+  max(rating) as highest_rating,
+  min(rating) as lowest_rating
+from df_asin_reviews
+
+
+# %%
+%sql
+#most helpful review with highest rating
+select 
+  review,
+  helpful,
+  rating
+from df_asin_reviews
+where  helpful= (select max(helpful) from df_asin_reviews) #most helpful review
+and (rating=(select max(rating) as highest_rating from df_asin_reviews) #highest rating
+OR rating=(select min(rating) as highest_rating from df_asin_reviews) #lowest rating
+)
 
 # COMMAND ----------
 
